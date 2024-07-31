@@ -9,10 +9,10 @@ from folium import plugins
 import io
 from geopy.distance import geodesic
 import base64
+import requests
 
 # Function to fetch data from a URL
 def fetch_data(url):
-    import requests
     response = requests.get(url)
     response.raise_for_status()  # Raise an error for bad status codes
     data = response.json()  # Assuming the data is in JSON format
@@ -33,17 +33,17 @@ def calculate_convex_hull_area(points):
 def calculate_centroid(points):
     return np.mean(points, axis=0)
 
-# Function to process the uploaded file and return the map and field areas
-def process_file(file):
-    # Load the CSV file
-    gps_data = pd.read_csv(file)
+# Function to process the fetched data and return the map and field areas
+def process_data(data):
+    # Convert the data to a DataFrame
+    gps_data = pd.DataFrame(data)
 
     # Check the columns available
     st.write("Available columns:", gps_data.columns.tolist())
     
     # Use the correct column names
     if 'Timestamp' not in gps_data.columns:
-        st.error("The CSV file does not contain a 'Timestamp' column.")
+        st.error("The data does not contain a 'Timestamp' column.")
         return None, None
     
     gps_data = gps_data[['lat', 'lng', 'Timestamp']]
@@ -141,43 +141,7 @@ def process_file(file):
         'Travel Time to Next Field (minutes)': travel_times
     })
     
-    # Create a satellite map
-    map_center = [gps_data['lat'].mean(), gps_data['lng'].mean()]
-    m = folium.Map(location=map_center, zoom_start=12)
-    
-    # Add Mapbox satellite imagery
-    mapbox_token = 'pk.eyJ1IjoiZmxhc2hvcDAwNyIsImEiOiJjbHo5NzkycmIwN2RxMmtzZHZvNWpjYmQ2In0.A_FZYl5zKjwSZpJuP_MHiA'
-    folium.TileLayer(
-        tiles='https://api.mapbox.com/styles/v1/mapbox/satellite-v9/tiles/256/{z}/{x}/{y}?access_token=' + mapbox_token,
-        attr='Mapbox Satellite Imagery',
-        name='Satellite',
-        overlay=True,
-        control=True
-    ).add_to(m)
-    
-    # Add fullscreen control
-    plugins.Fullscreen(position='topright').add_to(m)
-
-    # Plot the points on the map
-    for idx, row in gps_data.iterrows():
-        color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
-        folium.CircleMarker(
-            location=(row['lat'], row['lng']),
-            radius=2,
-            color=color,
-            fill=True,
-            fill_color=color
-        ).add_to(m)
-
-    return m, combined_df
-
-# Function to generate a download link for the map
-def get_map_download_link(map_obj, filename='map.html'):
-    # Save the map to an HTML file
-    map_html = map_obj._repr_html_()
-    b64 = base64.b64encode(map_html.encode()).decode()
-    href = f'<a href="data:file/html;base64,{b64}" download="{filename}">Download Map</a>'
-    return href
+    return combined_df
 
 # Streamlit app
 st.title("Field Area and Time Calculation from GPS Data")
@@ -194,29 +158,29 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-st.write("Upload a CSV file with 'lat', 'lng', and 'Timestamp' columns to calculate field areas and visualize them on a satellite map.")
+st.write("Fetch data from an API and calculate field areas, times, and travel distances.")
 
-uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+api_url = st.text_input("Enter API URL to fetch data:")
 
-if uploaded_file is not None:
-    st.write("Processing file...")
-    folium_map, combined_df = process_file(uploaded_file)
-    
-    if folium_map is not None:
-        st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
-        st.write("Download the combined data as a CSV file:")
+if api_url:
+    st.write("Fetching data from API...")
+    try:
+        data = fetch_data(api_url)
+        combined_df = process_data(data)
         
-        # Provide download link
-        csv = combined_df.to_csv(index=False)
-        st.download_button(
-            label="Download CSV",
-            data=csv,
-            file_name='field_areas_times_dates_and_travel_metrics.csv',
-            mime='text/csv'
-        )
-        
-        # Provide download link for map
-        map_download_link = get_map_download_link(folium_map)
-        st.markdown(map_download_link, unsafe_allow_html=True)
-    else:
-        st.error("Failed to process the file.")
+        if combined_df is not None:
+            st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
+            st.write("Download the combined data as a CSV file:")
+            
+            # Provide download link
+            csv = combined_df.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name='field_areas_times_dates_and_travel_metrics.csv',
+                mime='text/csv'
+            )
+        else:
+            st.error("Failed to process the data.")
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
