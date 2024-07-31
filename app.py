@@ -162,7 +162,7 @@ def process_file(file):
     for idx, row in gps_data.iterrows():
         color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
         folium.CircleMarker(
-            location=(row['lat'], 'lng']),
+            location=(row['lat'], row['lng']),
             radius=2,
             color=color,
             fill=True,
