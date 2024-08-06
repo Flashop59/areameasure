@@ -1,22 +1,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
+from shapely.ops import transform
 from sklearn.cluster import DBSCAN
 from scipy.spatial import ConvexHull
 import folium
 from folium import plugins
-import io
 from geopy.distance import geodesic
+from pyproj import Proj, transform
 import base64
-import requests
-
-# Function to fetch data from a URL
-def fetch_data(url):
-    response = requests.get(url)
-    response.raise_for_status()  # Raise an error for bad status codes
-    data = response.json()  # Assuming the data is in JSON format
-    return data
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -29,21 +22,37 @@ def calculate_convex_hull_area(points):
     except Exception:
         return 0
 
+# Function to calculate the area in square meters using a projection
+def calculate_area_in_square_meters(lat_lng_points):
+    if len(lat_lng_points) < 3:
+        return 0
+    
+    # Define the projection transformations
+    proj_lat_lng = Proj(proj='latlong', datum='WGS84')
+    proj_utm = Proj(proj="utm", zone=43, datum='WGS84')  # Adjust the UTM zone based on your location
+    
+    # Convert points to UTM
+    utm_points = [transform(proj_lat_lng, proj_utm, lon, lat) for lat, lon in lat_lng_points]
+    
+    # Create a polygon and calculate the area in square meters
+    poly = Polygon(utm_points)
+    return poly.area
+
 # Function to calculate centroid of a set of points
 def calculate_centroid(points):
     return np.mean(points, axis=0)
 
-# Function to process the fetched data and return the map and field areas
-def process_data(data):
-    # Convert the data to a DataFrame
-    gps_data = pd.DataFrame(data)
+# Function to process the uploaded file and return the map and field areas
+def process_file(file):
+    # Load the CSV file
+    gps_data = pd.read_csv(file)
 
     # Check the columns available
     st.write("Available columns:", gps_data.columns.tolist())
     
     # Use the correct column names
     if 'Timestamp' not in gps_data.columns:
-        st.error("The data does not contain a 'Timestamp' column.")
+        st.error("The CSV file does not contain a 'Timestamp' column.")
         return None, None
     
     gps_data = gps_data[['lat', 'lng', 'Timestamp']]
@@ -65,13 +74,10 @@ def process_data(data):
     # Calculate the area for each field
     fields = gps_data[gps_data['field_id'] != -1]  # Exclude noise points
     field_areas = fields.groupby('field_id').apply(
-        lambda df: calculate_convex_hull_area(df[['lat', 'lng']].values))
-
-    # Convert the area from square degrees to square meters (approximation)
-    field_areas_m2 = field_areas * 0.77 * (111000 ** 2)  # rough approximation
+        lambda df: calculate_area_in_square_meters(df[['lat', 'lng']].values))
 
     # Convert the area from square meters to gunthas (1 guntha = 101.17 m^2)
-    field_areas_gunthas = field_areas_m2 / 101.17
+    field_areas_gunthas = field_areas / 101.17
 
     # Calculate time metrics for each field
     field_times = fields.groupby('field_id').apply(
@@ -141,7 +147,43 @@ def process_data(data):
         'Travel Time to Next Field (minutes)': travel_times
     })
     
-    return combined_df
+    # Create a satellite map
+    map_center = [gps_data['lat'].mean(), gps_data['lng'].mean()]
+    m = folium.Map(location=map_center, zoom_start=12)
+    
+    # Add Mapbox satellite imagery
+    mapbox_token = 'pk.eyJ1IjoiZmxhc2hvcDAwNyIsImEiOiJjbHo5NzkycmIwN2RxMmtzZHZvNWpjYmQ2In0.A_FZYl5zKjwSZpJuP_MHiA'
+    folium.TileLayer(
+        tiles='https://api.mapbox.com/styles/v1/mapbox/satellite-v9/tiles/256/{z}/{x}/{y}?access_token=' + mapbox_token,
+        attr='Mapbox Satellite Imagery',
+        name='Satellite',
+        overlay=True,
+        control=True
+    ).add_to(m)
+    
+    # Add fullscreen control
+    plugins.Fullscreen(position='topright').add_to(m)
+
+    # Plot the points on the map
+    for idx, row in gps_data.iterrows():
+        color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
+        folium.CircleMarker(
+            location=(row['lat'], 'lng'),
+            radius=2,
+            color=color,
+            fill=True,
+            fill_color=color
+        ).add_to(m)
+
+    return m, combined_df
+
+# Function to generate a download link for the map
+def get_map_download_link(map_obj, filename='map.html'):
+    # Save the map to an HTML file
+    map_html = map_obj._repr_html_()
+    b64 = base64.b64encode(map_html.encode()).decode()
+    href = f'<a href="data:file/html;base64,{b64}" download="{filename}">Download Map</a>'
+    return href
 
 # Streamlit app
 st.title("Field Area and Time Calculation from GPS Data")
@@ -150,37 +192,37 @@ st.title("Field Area and Time Calculation from GPS Data")
 st.markdown("""
     <style>
         .header { display: flex; align-items: center; }
-        .header img { height: 50px; margin-right: 20px; }
+        .header img { height: 80px; margin-right: 35px; }
     </style>
     <div class="header">
-        <img src="https://i.ibb.co/JjWJLpd/image.png" alt="logo">
-        <h1>Orbit Farming</h1>
+        <img src="https://i.ibb.co/JjWJLpd/image.png" alt="Logo">
+        <h1>Field Area and Time Calculation from GPS Data</h1>
     </div>
 """, unsafe_allow_html=True)
 
-st.write("Fetch data from an API and calculate field areas, times, and travel distances.")
+st.write("Upload a CSV file with 'lat', 'lng', and 'Timestamp' columns to calculate field areas and visualize them on a satellite map.")
 
-api_url = st.text_input("Enter API URL to fetch data:")
+uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
-if api_url:
-    st.write("Fetching data from API...")
-    try:
-        data = fetch_data(api_url)
-        combined_df = process_data(data)
+if uploaded_file is not None:
+    st.write("Processing file...")
+    folium_map, combined_df = process_file(uploaded_file)
+    
+    if folium_map is not None:
+        st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
+        st.write("Download the combined data as a CSV file:")
         
-        if combined_df is not None:
-            st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
-            st.write("Download the combined data as a CSV file:")
-            
-            # Provide download link
-            csv = combined_df.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name='field_areas_times_dates_and_travel_metrics.csv',
-                mime='text/csv'
-            )
-        else:
-            st.error("Failed to process the data.")
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+        # Provide download link
+        csv = combined_df.to_csv(index=False)
+        st.download_button(
+            label="Download CSV",
+            data=csv,
+            file_name='field_areas_times_dates_and_travel_metrics.csv',
+            mime='text/csv'
+        )
+        
+        # Provide download link for map
+        map_download_link = get_map_download_link(folium_map)
+        st.markdown(map_download_link, unsafe_allow_html=True)
+    else:
+        st.error("Failed to process the file.")
