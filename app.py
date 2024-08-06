@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from shapely.geometry import Polygon
+from shapely.ops import transform
 from sklearn.cluster import DBSCAN
 from scipy.spatial import ConvexHull
 import folium
@@ -9,7 +10,7 @@ from folium import plugins
 import io
 from geopy.distance import geodesic
 import base64
-from pyproj import Proj, transform
+import pyproj
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -18,7 +19,12 @@ def calculate_convex_hull_area(points):
     try:
         hull = ConvexHull(points)
         poly = Polygon(points[hull.vertices])
-        return poly.area  # Area in square meters
+
+        # Project the polygon to a suitable UTM zone for accurate area calculation
+        proj = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)
+        projected_poly = transform(proj.transform, poly)
+
+        return projected_poly.area  # Area in square meters
     except Exception:
         return 0
 
@@ -60,13 +66,8 @@ def process_file(file):
     field_areas = fields.groupby('field_id').apply(
         lambda df: calculate_convex_hull_area(df[['lat', 'lng']].values))
 
-    # Convert the area from square degrees to square meters using UTM coordinates
-    in_proj = Proj('epsg:4326')  # WGS84
-    out_proj = Proj('epsg:32643')  # UTM zone 43N
-    field_areas_m2 = field_areas.apply(lambda area: transform(in_proj, out_proj, area[0], area[1]))
-
     # Convert the area from square meters to gunthas (1 guntha = 101.17 m^2)
-    field_areas_gunthas = field_areas_m2 / 101.17
+    field_areas_gunthas = field_areas / 101.17
 
     # Calculate time metrics for each field
     field_times = fields.groupby('field_id').apply(
@@ -156,9 +157,8 @@ def process_file(file):
     # Plot the points on the map
     for idx, row in gps_data.iterrows():
         color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
-        location = (row['lat'], row['lng'])
         folium.CircleMarker(
-            location=location,
+            location=(row['lat'], row['lng']),
             radius=2,
             color=color,
             fill=True,
@@ -198,17 +198,6 @@ if uploaded_file is not None:
     st.write("Processing file...")
     folium_map, combined_df = process_file(uploaded_file)
     
-    if folium_map and combined_df is not None:
-        st.write("Processed data:")
-        st.dataframe(combined_df)
-        
-        st.write("Field areas and times have been calculated successfully.")
-        
-        st.write("Satellite map with fields:")
-        folium_static(folium_map)
-        
-        st.markdown(get_map_download_link(folium_map), unsafe_allow_html=True)
-    else:
-        st.write("Failed to process the file. Please check the file format and try again.")
-else:
-    st.write("Please upload a CSV file to proceed.")
+    if folium_map is not None:
+        st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
+        st.write("Download the combined data as a CSV file:")
