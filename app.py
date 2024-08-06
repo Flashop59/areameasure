@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from shapely.geometry import Polygon, Point
-from shapely.ops import transform
+from shapely.geometry import Polygon
 from sklearn.cluster import DBSCAN
 from scipy.spatial import ConvexHull
 import folium
 from folium import plugins
+import io
 from geopy.distance import geodesic
-from pyproj import Proj, transform
 import base64
+from pyproj import Proj, transform
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -18,25 +18,9 @@ def calculate_convex_hull_area(points):
     try:
         hull = ConvexHull(points)
         poly = Polygon(points[hull.vertices])
-        return poly.area  # Area in square degrees
+        return poly.area  # Area in square meters
     except Exception:
         return 0
-
-# Function to calculate the area in square meters using a projection
-def calculate_area_in_square_meters(lat_lng_points):
-    if len(lat_lng_points) < 3:
-        return 0
-    
-    # Define the projection transformations
-    proj_lat_lng = Proj(proj='latlong', datum='WGS84')
-    proj_utm = Proj(proj="utm", zone=43, datum='WGS84')  # Adjust the UTM zone based on your location
-    
-    # Convert points to UTM
-    utm_points = [transform(proj_lat_lng, proj_utm, lon, lat) for lat, lon in lat_lng_points]
-    
-    # Create a polygon and calculate the area in square meters
-    poly = Polygon(utm_points)
-    return poly.area
 
 # Function to calculate centroid of a set of points
 def calculate_centroid(points):
@@ -74,10 +58,15 @@ def process_file(file):
     # Calculate the area for each field
     fields = gps_data[gps_data['field_id'] != -1]  # Exclude noise points
     field_areas = fields.groupby('field_id').apply(
-        lambda df: calculate_area_in_square_meters(df[['lat', 'lng']].values))
+        lambda df: calculate_convex_hull_area(df[['lat', 'lng']].values))
+
+    # Convert the area from square degrees to square meters using UTM coordinates
+    in_proj = Proj('epsg:4326')  # WGS84
+    out_proj = Proj('epsg:32643')  # UTM zone 43N
+    field_areas_m2 = field_areas.apply(lambda area: transform(in_proj, out_proj, area[0], area[1]))
 
     # Convert the area from square meters to gunthas (1 guntha = 101.17 m^2)
-    field_areas_gunthas = field_areas / 101.17
+    field_areas_gunthas = field_areas_m2 / 101.17
 
     # Calculate time metrics for each field
     field_times = fields.groupby('field_id').apply(
@@ -167,8 +156,9 @@ def process_file(file):
     # Plot the points on the map
     for idx, row in gps_data.iterrows():
         color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
+        location = (row['lat'], row['lng'])
         folium.CircleMarker(
-            location=(row['lat'], 'lng'),
+            location=location,
             radius=2,
             color=color,
             fill=True,
@@ -208,21 +198,17 @@ if uploaded_file is not None:
     st.write("Processing file...")
     folium_map, combined_df = process_file(uploaded_file)
     
-    if folium_map is not None:
-        st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
-        st.write("Download the combined data as a CSV file:")
+    if folium_map and combined_df is not None:
+        st.write("Processed data:")
+        st.dataframe(combined_df)
         
-        # Provide download link
-        csv = combined_df.to_csv(index=False)
-        st.download_button(
-            label="Download CSV",
-            data=csv,
-            file_name='field_areas_times_dates_and_travel_metrics.csv',
-            mime='text/csv'
-        )
+        st.write("Field areas and times have been calculated successfully.")
         
-        # Provide download link for map
-        map_download_link = get_map_download_link(folium_map)
-        st.markdown(map_download_link, unsafe_allow_html=True)
+        st.write("Satellite map with fields:")
+        folium_static(folium_map)
+        
+        st.markdown(get_map_download_link(folium_map), unsafe_allow_html=True)
     else:
-        st.error("Failed to process the file.")
+        st.write("Failed to process the file. Please check the file format and try again.")
+else:
+    st.write("Please upload a CSV file to proceed.")
