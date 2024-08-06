@@ -5,5 +5,5 @@ shapely==2.0.1
 scikit-learn==1.3.0
 scipy==1.11.3
 folium==0.14.0
-geopy==2.7.0
+geopy==2.3.0
 pyproj==3.6.0
