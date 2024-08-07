@@ -10,7 +10,7 @@ from folium import plugins
 import base64
 import pyproj
 import tempfile
-from geopy.distance import geodesic  # Add this import
+from geopy.distance import geodesic
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -24,8 +24,11 @@ def calculate_convex_hull_area(points):
         proj = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)
         projected_poly = transform(proj.transform, poly)
 
-        return projected_poly.area  # Area in square meters
-    except Exception:
+        area = projected_poly.area
+        print(f"Calculated area (m^2): {area}")  # Debugging output
+        return area  # Area in square meters
+    except Exception as e:
+        print(f"Error calculating convex hull area: {e}")  # Debugging output
         return 0
 
 # Function to calculate centroid of a set of points
@@ -158,7 +161,7 @@ def process_file(file):
     for idx, row in gps_data.iterrows():
         color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
         folium.CircleMarker(
-            location=(row['lat'], row['lng']),
+            location=(row['lat'], 'lng'),
             radius=2,
             color=color,
             fill=True,
@@ -187,22 +190,20 @@ st.title("Field Area and Time Calculation from GPS Data")
 st.markdown("""
     <style>
         .header { display: flex; align-items: center; }
-        .header img { height: 80px; margin-right: 35px; }
+        .header img { height: 80px; margin-right: 20px; }
     </style>
     <div class="header">
-        <img src="https://i.ibb.co/JjWJLpd/image.png" alt="Logo">
-        <h1>Field Area and Time Calculation from GPS Data</h1>
+        <img src="https://www.orbitfarming.com/static/img/logo.8e8e0e1a.png" alt="Orbit Farming Logo">
+        <h1>Orbit Farming</h1>
     </div>
 """, unsafe_allow_html=True)
 
-st.write("Upload a CSV file with 'lat', 'lng', and 'Timestamp' columns to calculate field areas and visualize them on a satellite map.")
-
-uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+# File uploader
+uploaded_file = st.file_uploader("Upload CSV file", type="csv")
 
 if uploaded_file is not None:
     map_file_path, combined_df = process_file(uploaded_file)
-
-    if combined_df is not None:
+    if map_file_path is not None:
         st.write("Calculated Field Areas and Times:")
         st.dataframe(combined_df)
 
