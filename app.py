@@ -201,3 +201,13 @@ if uploaded_file is not None:
     if folium_map is not None:
         st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
         st.write("Download the combined data as a CSV file:")
+        st.download_button(
+            label="Download CSV",
+            data=combined_df.to_csv(index=False).encode('utf-8'),
+            file_name='field_data.csv',
+            mime='text/csv'
+        )
+        st.write("Map:")
+        st.components.v1.html(folium_map._repr_html_(), height=600)
+
+        st.write(get_map_download_link(folium_map), unsafe_allow_html=True)
