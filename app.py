@@ -1,217 +1,100 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import folium
+from folium.plugins import HeatMap
 from shapely.geometry import Polygon
 from shapely.ops import transform
-from sklearn.cluster import DBSCAN
-from scipy.spatial import ConvexHull
-import folium
-from folium import plugins
-import base64
-import pyproj
-import tempfile
-from geopy.distance import geodesic
+from pyproj import Proj, transform
+import geopy.distance
+from io import BytesIO
 
-# Function to calculate the area of a field in square meters using convex hull
-def calculate_convex_hull_area(points):
-    if len(points) < 3:  # Not enough points to form a polygon
-        return 0
+# Constants
+in_proj = Proj(init='epsg:4326')
+out_proj = Proj(proj='aea', lat_1=29.5, lat_2=45.5)
+
+# Function to calculate the convex hull area
+def calculate_convex_hull_area(coords):
     try:
-        hull = ConvexHull(points)
-        poly = Polygon(points[hull.vertices])
-
-        # Project the polygon to a suitable UTM zone for accurate area calculation
-        proj = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:32643", always_xy=True)
-        projected_poly = transform(proj.transform, poly)
-
-        area = projected_poly.area
-        print(f"Calculated area (m^2): {area}")  # Debugging output
-        return area  # Area in square meters
+        polygon = Polygon(coords)
+        area = transform(in_proj, out_proj, polygon).area
+        return area
     except Exception as e:
-        print(f"Error calculating convex hull area: {e}")  # Debugging output
+        print(f"Error calculating convex hull area: {e}")
         return 0
 
-# Function to calculate centroid of a set of points
-def calculate_centroid(points):
-    return np.mean(points, axis=0)
+# Function to process the uploaded file
+def process_file(uploaded_file):
+    # Read the CSV file
+    df = pd.read_csv(uploaded_file)
 
-# Function to process the uploaded file and return the map and field areas
-def process_file(file):
-    # Load the CSV file
-    gps_data = pd.read_csv(file)
-
-    # Check the columns available
-    st.write("Available columns:", gps_data.columns.tolist())
-    
-    # Use the correct column names
-    if 'Timestamp' not in gps_data.columns:
-        st.error("The CSV file does not contain a 'Timestamp' column.")
-        return None, None
-    
-    gps_data = gps_data[['lat', 'lng', 'Timestamp']]
-    
-    # Convert Timestamp column to datetime with correct format
-    gps_data['Timestamp'] = pd.to_datetime(gps_data['Timestamp'], format='%d-%m-%Y %H.%M', errors='coerce', dayfirst=True)
-    
-    # Drop rows where conversion failed
-    gps_data = gps_data.dropna(subset=['Timestamp'])
-    
-    # Cluster the GPS points to identify separate fields
-    coords = gps_data[['lat', 'lng']].values
-    db = DBSCAN(eps=0.00008, min_samples=11).fit(coords)
-    labels = db.labels_
-
-    # Add labels to the data
-    gps_data['field_id'] = labels
-
-    # Calculate the area for each field
-    fields = gps_data[gps_data['field_id'] != -1]  # Exclude noise points
-    field_areas = fields.groupby('field_id').apply(
-        lambda df: calculate_convex_hull_area(df[['lat', 'lng']].values))
-
-    # Convert the area from square meters to gunthas (1 guntha = 101.17 m^2)
-    field_areas_gunthas = field_areas / 101.17
-
-    # Calculate time metrics for each field
-    field_times = fields.groupby('field_id').apply(
-        lambda df: (df['Timestamp'].max() - df['Timestamp'].min()).total_seconds() / 60.0
+    # Calculate field areas
+    field_areas = df.groupby('field_id').apply(
+        lambda df: calculate_convex_hull_area(df[['lat', 'lng']].values)
     )
+    field_areas_m2 = field_areas / 10000  # Convert from m^2 to hectares
 
-    # Extract start and end dates for each field
-    field_dates = fields.groupby('field_id').agg(
-        start_date=('Timestamp', 'min'),
-        end_date=('Timestamp', 'max')
-    )
+    # Calculate centroids
+    field_centroids = df.groupby('field_id')[['lat', 'lng']].mean()
 
-    # Filter out fields with area less than 5 gunthas
-    valid_fields = field_areas_gunthas[field_areas_gunthas >= 5].index
-    field_areas_gunthas = field_areas_gunthas[valid_fields]
-    field_times = field_times[valid_fields]
-    field_dates = field_dates.loc[valid_fields]
-
-    # Calculate centroids of each field
-    centroids = fields.groupby('field_id').apply(
-        lambda df: calculate_centroid(df[['lat', 'lng']].values)
-    )
-
-    # Calculate traveling distance and time between field centroids
-    travel_distances = []
-    travel_times = []
-    field_ids = list(valid_fields)
+    # Calculate travel distances
+    distances = []
+    for i in range(len(field_centroids) - 1):
+        centroid1 = field_centroids.iloc[i]
+        centroid2 = field_centroids.iloc[i + 1]
+        distance = geopy.distance.geodesic((centroid1['lat'], centroid1['lng']), (centroid2['lat'], centroid2['lng'])).kilometers
+        distances.append(distance)
     
-    if len(field_ids) > 1:
-        for i in range(len(field_ids) - 1):
-            centroid1 = centroids.loc[field_ids[i]]
-            centroid2 = centroids.loc[field_ids[i + 1]]
-            distance = geodesic(centroid1, centroid2).kilometers
-            time = (field_dates.loc[field_ids[i + 1], 'start_date'] - field_dates.loc[field_ids[i], 'end_date']).total_seconds() / 60.0
-            travel_distances.append(distance)
-            travel_times.append(time)
-
-        # Calculate distance from last point of one field to first point of the next field
-        for i in range(len(field_ids) - 1):
-            end_point = fields[fields['field_id'] == field_ids[i]][['lat', 'lng']].values[-1]
-            start_point = fields[fields['field_id'] == field_ids[i + 1]][['lat', 'lng']].values[0]
-            distance = geodesic(end_point, start_point).kilometers
-            time = (field_dates.loc[field_ids[i + 1], 'start_date'] - field_dates.loc[field_ids[i], 'end_date']).total_seconds() / 60.0
-            travel_distances.append(distance)
-            travel_times.append(time)
-
-        # Append NaN for the last field
-        travel_distances.append(np.nan)
-        travel_times.append(np.nan)
-    else:
-        travel_distances.append(np.nan)
-        travel_times.append(np.nan)
-
-    # Ensure lengths match for DataFrame
-    if len(travel_distances) != len(field_areas_gunthas):
-        travel_distances = travel_distances[:len(field_areas_gunthas)]
-        travel_times = travel_times[:len(field_areas_gunthas)]
-
-    # Combine area, time, dates, and travel metrics into a single DataFrame
+    total_distance = np.sum(distances)
+    
+    # Prepare the results dataframe
     combined_df = pd.DataFrame({
-        'Field ID': field_areas_gunthas.index,
-        'Area (Gunthas)': field_areas_gunthas.values,
-        'Time (Minutes)': field_times.values,
-        'Start Date': field_dates['start_date'].values,
-        'End Date': field_dates['end_date'].values,
-        'Travel Distance to Next Field (km)': travel_distances,
-        'Travel Time to Next Field (minutes)': travel_times
+        'field_id': field_areas.index,
+        'area_hectares': field_areas_m2,
+        'centroid_lat': field_centroids['lat'],
+        'centroid_lng': field_centroids['lng']
     })
     
-    # Create a satellite map
-    map_center = [gps_data['lat'].mean(), gps_data['lng'].mean()]
-    m = folium.Map(location=map_center, zoom_start=12)
+    # Create the map
+    m = folium.Map(location=[df['lat'].mean(), df['lng'].mean()], zoom_start=10)
     
-    # Add Mapbox satellite imagery
-    mapbox_token = 'pk.eyJ1IjoiZmxhc2hvcDAwNyIsImEiOiJjbHo5NzkycmIwN2RxMmtzZHZvNWpjYmQ2In0.A_FZYl5zKjwSZpJuP_MHiA'
-    folium.TileLayer(
-        tiles='https://api.mapbox.com/styles/v1/mapbox/satellite-v9/tiles/256/{z}/{x}/{y}?access_token=' + mapbox_token,
-        attr='Mapbox Satellite Imagery',
-        name='Satellite',
-        overlay=True,
-        control=True
-    ).add_to(m)
+    # Add the field areas to the map
+    for _, row in combined_df.iterrows():
+        folium.Marker(location=[row['centroid_lat'], row['centroid_lng']], 
+                      popup=f"Field ID: {row['field_id']}<br>Area: {row['area_hectares']:.2f} ha").add_to(m)
+
+    # Save the map to an HTML file
+    map_file_path = '/mnt/data/map.html'
+    m.save(map_file_path)
     
-    # Add fullscreen control
-    plugins.Fullscreen(position='topright').add_to(m)
-
-    # Plot the points on the map
-    for idx, row in gps_data.iterrows():
-        color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
-        folium.CircleMarker(
-            location=(row['lat'], 'lng'),
-            radius=2,
-            color=color,
-            fill=True,
-            fill_color=color
-        ).add_to(m)
-
-    # Save the map as an HTML file in a temporary directory
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.html') as tmp_file:
-        m.save(tmp_file.name)
-        map_file_path = tmp_file.name
-
     return map_file_path, combined_df
 
-# Function to generate a download link for the map
-def get_map_download_link(map_file_path, filename='map.html'):
-    with open(map_file_path, 'rb') as f:
-        map_html = f.read()
-    b64 = base64.b64encode(map_html).decode()
-    href = f'<a href="data:file/html;base64,{b64}" download="{filename}">Download Map</a>'
-    return href
+# Streamlit app layout
+st.title("Field Area and Distance Calculator")
+st.write("Upload a CSV file containing 'field_id', 'lat', and 'lng' columns.")
 
-# Streamlit app
-st.title("Field Area and Time Calculation from GPS Data")
-
-# Display logo
-st.markdown("""
-    <style>
-        .header { display: flex; align-items: center; }
-        .header img { height: 80px; margin-right: 20px; }
-    </style>
-    <div class="header">
-        <img src="https://www.orbitfarming.com/static/img/logo.8e8e0e1a.png" alt="Orbit Farming Logo">
-        <h1>Orbit Farming</h1>
-    </div>
-""", unsafe_allow_html=True)
-
-# File uploader
-uploaded_file = st.file_uploader("Upload CSV file", type="csv")
+uploaded_file = st.file_uploader("Choose a file...", type="csv")
 
 if uploaded_file is not None:
     map_file_path, combined_df = process_file(uploaded_file)
-    if map_file_path is not None:
-        st.write("Calculated Field Areas and Times:")
-        st.dataframe(combined_df)
-
-        st.download_button(
-            label="Download CSV",
-            data=combined_df.to_csv(index=False).encode('utf-8'),
-            file_name='field_data.csv',
-            mime='text/csv'
+    
+    st.write("### Field Areas and Centroids")
+    st.dataframe(combined_df)
+    
+    st.write("### Total Travel Distance")
+    total_distance = combined_df.apply(
+        lambda row: geopy.distance.geodesic(
+            (row['centroid_lat'], row['centroid_lng']),
+            (combined_df.iloc[0]['centroid_lat'], combined_df.iloc[0]['centroid_lng'])
+        ).km, axis=1).sum()
+    st.write(f"Total distance to cover all fields: {total_distance:.2f} km")
+    
+    st.write("### Map of Fields")
+    st.write("You can download the map below.")
+    with open(map_file_path, "rb") as file:
+        btn = st.download_button(
+            label="Download Map as HTML",
+            data=file,
+            file_name="map.html",
+            mime="text/html"
         )
-
-        st.write(get_map_download_link(map_file_path), unsafe_allow_html=True)
