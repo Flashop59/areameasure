@@ -9,6 +9,7 @@ import folium
 from folium import plugins
 import base64
 import pyproj
+import tempfile
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -163,9 +164,10 @@ def process_file(file):
             fill_color=color
         ).add_to(m)
 
-    # Save the map as an HTML file
-    map_file_path = '/mnt/data/field_map.html'
-    m.save(map_file_path)
+    # Save the map as an HTML file in a temporary directory
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.html') as tmp_file:
+        m.save(tmp_file.name)
+        map_file_path = tmp_file.name
 
     return map_file_path, combined_df
 
