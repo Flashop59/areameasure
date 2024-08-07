@@ -7,8 +7,6 @@ from sklearn.cluster import DBSCAN
 from scipy.spatial import ConvexHull
 import folium
 from folium import plugins
-import io
-from geopy.distance import geodesic
 import base64
 import pyproj
 
@@ -165,13 +163,17 @@ def process_file(file):
             fill_color=color
         ).add_to(m)
 
-    return m, combined_df
+    # Save the map as an HTML file
+    map_file_path = '/mnt/data/field_map.html'
+    m.save(map_file_path)
+
+    return map_file_path, combined_df
 
 # Function to generate a download link for the map
-def get_map_download_link(map_obj, filename='map.html'):
-    # Save the map to an HTML file
-    map_html = map_obj._repr_html_()
-    b64 = base64.b64encode(map_html.encode()).decode()
+def get_map_download_link(map_file_path, filename='map.html'):
+    with open(map_file_path, 'rb') as f:
+        map_html = f.read()
+    b64 = base64.b64encode(map_html).decode()
     href = f'<a href="data:file/html;base64,{b64}" download="{filename}">Download Map</a>'
     return href
 
@@ -195,19 +197,17 @@ st.write("Upload a CSV file with 'lat', 'lng', and 'Timestamp' columns to calcul
 uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
 if uploaded_file is not None:
-    st.write("Processing file...")
-    folium_map, combined_df = process_file(uploaded_file)
-    
-    if folium_map is not None:
-        st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
-        st.write("Download the combined data as a CSV file:")
+    map_file_path, combined_df = process_file(uploaded_file)
+
+    if combined_df is not None:
+        st.write("Calculated Field Areas and Times:")
+        st.dataframe(combined_df)
+        
         st.download_button(
             label="Download CSV",
             data=combined_df.to_csv(index=False).encode('utf-8'),
             file_name='field_data.csv',
             mime='text/csv'
         )
-        st.write("Map:")
-        st.components.v1.html(folium_map._repr_html_(), height=600)
-
-        st.write(get_map_download_link(folium_map), unsafe_allow_html=True)
+        
+        st.write(get_map_download_link(map_file_path), unsafe_allow_html=True)
