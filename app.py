@@ -10,6 +10,7 @@ from folium import plugins
 import base64
 import pyproj
 import tempfile
+from geopy.distance import geodesic  # Add this import
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -204,12 +205,12 @@ if uploaded_file is not None:
     if combined_df is not None:
         st.write("Calculated Field Areas and Times:")
         st.dataframe(combined_df)
-        
+
         st.download_button(
             label="Download CSV",
             data=combined_df.to_csv(index=False).encode('utf-8'),
             file_name='field_data.csv',
             mime='text/csv'
         )
-        
+
         st.write(get_map_download_link(map_file_path), unsafe_allow_html=True)
