@@ -22,37 +22,33 @@ def fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp):
         st.error(f"Failed to fetch data: {response.status_code}")
         return []
 
-# Function to convert UTC to IST with multiple formats
-def convert_to_ist(utc_time):
-    # Define potential formats for parsing
-    formats = [
-        '%Y-%m-%dT%H:%M:%S.%fZ',  # Example: 2024-08-08T12:34:56.789Z
-        '%Y-%m-%dT%H:%M:%S.%f',   # Example: 2024-08-08T12:34:56.789
-        '%Y-%m-%dT%H:%M:%S',       # Example: 2024-08-08T12:34:56
-    ]
-    for fmt in formats:
-        try:
-            utc_datetime = datetime.strptime(utc_time, fmt)
-            ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
-            return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
-        except ValueError:
-            continue
-    st.error(f"Unrecognized timestamp format: {utc_time}")
-    return 'Invalid Timestamp'
+# Function to convert integer timestamps to IST
+def convert_to_ist(timestamp):
+    try:
+        utc_datetime = datetime.fromtimestamp(timestamp / 1000)  # Assuming timestamp is in milliseconds
+        ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
+        return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        st.error(f"Error converting timestamp: {e}")
+        return 'Invalid Timestamp'
 
 # Function to process the data and return a DataFrame
 def process_data(data):
     processed_data = []
-    # Check if the data is a list of dictionaries
-    if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
+    # Check if the data is a list of numbers
+    if isinstance(data, list) and all(isinstance(entry, int) for entry in data):
         for index, entry in enumerate(data):
             try:
-                ist_time = convert_to_ist(entry.get('time', ''))
+                # Convert entry to a dictionary for processing
+                timestamp = entry.get('time', None)
                 lat = entry.get('lat', 'N/A')
                 lon = entry.get('lon', 'N/A')
                 odometer = entry.get('odometer', 'N/A')
                 state = entry.get('state', 'N/A')
 
+                # Assuming entry is a timestamp and needs conversion
+                ist_time = convert_to_ist(timestamp)
+                
                 if lat == 'N/A' or lon == 'N/A':
                     st.warning(f"Missing latitude or longitude in entry {index}. Skipping.")
                     continue
