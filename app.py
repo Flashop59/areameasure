@@ -1,14 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
-from shapely.geometry import Point
-from shapely.geometry.polygon import Polygon
+from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
-import geopandas as gpd
 
 def fetch_data(vehicle_id, start_time, end_time):
-    url = f'https://admintestapi.ensuresystem.in/api/locationpull/orbit'
+    url = 'https://admintestapi.ensuresystem.in/api/locationpull/orbit'
     headers = {"token": "3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d"}
     params = {
         'vehicle': vehicle_id,
@@ -73,13 +70,18 @@ start_time = st.date_input("Start Time", datetime.now())
 end_time = st.date_input("End Time", datetime.now())
 
 if st.button("Fetch Data"):
-    st.write(f"Fetching data for vehicle: {vehicle_id} from {start_time} to {end_time}")
-    start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.000000Z')
-    end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.000000Z')
-    
-    data = fetch_data(vehicle_id, start_time_str, end_time_str)
-    
-    if data:
-        df = process_data(data)
-        st.write(df)
-        plot_data(df)
+    # Format the dates as required by the API
+    try:
+        start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.000000Z')
+        end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.000000Z')
+        
+        st.write(f"Fetching data for vehicle: {vehicle_id} from {start_time_str} to {end_time_str}")
+        
+        data = fetch_data(vehicle_id, start_time_str, end_time_str)
+        
+        if data:
+            df = process_data(data)
+            st.write(df)
+            plot_data(df)
+    except Exception as e:
+        st.error(f"Error: {e}")
