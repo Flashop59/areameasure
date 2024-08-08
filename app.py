@@ -20,14 +20,23 @@ def fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp):
         st.error(f"Failed to fetch data: {response.status_code}")
         return []
 
-# Function to convert UTC to IST
+# Function to convert UTC to IST with multiple formats
 def convert_to_ist(utc_time):
-    try:
-        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
-    except ValueError:
-        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%f')
-    ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
-    return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
+    # Define potential formats for parsing
+    formats = [
+        '%Y-%m-%dT%H:%M:%S.%fZ',  # Example: 2024-08-08T12:34:56.789Z
+        '%Y-%m-%dT%H:%M:%S.%f',   # Example: 2024-08-08T12:34:56.789
+        '%Y-%m-%dT%H:%M:%S',       # Example: 2024-08-08T12:34:56
+    ]
+    for fmt in formats:
+        try:
+            utc_datetime = datetime.strptime(utc_time, fmt)
+            ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
+            return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+    st.error(f"Unrecognized timestamp format: {utc_time}")
+    return 'Invalid Timestamp'
 
 # Function to process the data and return a DataFrame
 def process_data(data):
