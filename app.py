@@ -1,15 +1,45 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from shapely.geometry import Polygon
-from sklearn.cluster import DBSCAN
-from scipy.spatial import ConvexHull
-import folium
-from folium import plugins
-import io
-from geopy.distance import geodesic
-import base64
 import requests
+import numpy as np
+from datetime import datetime, timedelta
+from shapely.geometry import Polygon
+from scipy.spatial import ConvexHull
+from geopy.distance import geodesic
+
+# Function to fetch data from Ensure IoT API
+def fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp):
+    headers = {
+        'token': api_key
+    }
+    url = f"https://admintestapi.ensuresystem.in/api/locationpull/orbit?vehicle={vehicle}&from={start_timestamp}&to={end_timestamp}"
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        st.error(f"Failed to fetch data: {response.status_code}")
+        return []
+
+# Function to convert UTC to IST
+def convert_to_ist(utc_time):
+    utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+    ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
+    return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
+
+# Function to process the data and return a DataFrame
+def process_data(data):
+    processed_data = []
+    for index, entry in enumerate(data):
+        ist_time = convert_to_ist(entry['time'])
+        processed_data.append([
+            ist_time,
+            entry['lat'],
+            entry['lon'],
+            entry['odometer'],
+            entry['state'],
+            index + 1
+        ])
+    return pd.DataFrame(processed_data, columns=["Timestamp", "lat", "lng", "Odometer", "State", "Point"])
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -18,206 +48,36 @@ def calculate_convex_hull_area(points):
     try:
         hull = ConvexHull(points)
         poly = Polygon(points[hull.vertices])
-        return poly.area  # Area in square meters
+        return poly.area  # Area in square degrees
     except Exception:
         return 0
 
-# Function to calculate centroid of a set of points
-def calculate_centroid(points):
-    return np.mean(points, axis=0)
-
-# Function to fetch data from the GPS dashboard API
-def fetch_data(api_key, machine_id, start_date, end_date):
-    url = f"https://api.gps-dashboard.com/data?api_key={api_key}&machine_id={machine_id}&start_date={start_date}&end_date={end_date}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return pd.DataFrame(response.json())
-    else:
-        st.error(f"Failed to fetch data: {response.status_code}")
-        return pd.DataFrame()
-
-# Function to process the data and return the map and field areas
-def process_data(gps_data):
-    # Convert Timestamp column to datetime
-    gps_data['Timestamp'] = pd.to_datetime(gps_data['Timestamp'], format='%Y-%m-%dT%H:%M:%S', errors='coerce')
-
-    # Drop rows where conversion failed
-    gps_data = gps_data.dropna(subset=['Timestamp'])
-    
-    # Cluster the GPS points to identify separate fields
-    coords = gps_data[['lat', 'lng']].values
-    db = DBSCAN(eps=0.00008, min_samples=11).fit(coords)
-    labels = db.labels_
-
-    # Add labels to the data
-    gps_data['field_id'] = labels
-
-    # Convert lat/lon to meters
-    gps_data['x'] = gps_data['lat'].apply(lambda lat: geodesic((lat, gps_data['lng'].mean()), (lat, gps_data['lng'].mean() + 1)).meters)
-    gps_data['y'] = gps_data['lng'].apply(lambda lng: geodesic((gps_data['lat'].mean(), lng), (gps_data['lat'].mean() + 1, lng)).meters)
-    
-    # Calculate the area for each field
-    fields = gps_data[gps_data['field_id'] != -1]  # Exclude noise points
-    field_areas = fields.groupby('field_id').apply(
-        lambda df: calculate_convex_hull_area(df[['x', 'y']].values))
-
-    # Convert the area from square meters to gunthas (1 guntha = 101.17 m^2)
-    field_areas_gunthas = field_areas / 101.17
-
-    # Calculate time metrics for each field
-    field_times = fields.groupby('field_id').apply(
-        lambda df: (df['Timestamp'].max() - df['Timestamp'].min()).total_seconds() / 60.0
-    )
-
-    # Extract start and end dates for each field
-    field_dates = fields.groupby('field_id').agg(
-        start_date=('Timestamp', 'min'),
-        end_date=('Timestamp', 'max')
-    )
-
-    # Filter out fields with area less than 5 gunthas
-    valid_fields = field_areas_gunthas[field_areas_gunthas >= 5].index
-    field_areas_gunthas = field_areas_gunthas[valid_fields]
-    field_times = field_times[valid_fields]
-    field_dates = field_dates.loc[valid_fields]
-
-    # Calculate centroids of each field
-    centroids = fields.groupby('field_id').apply(
-        lambda df: calculate_centroid(df[['lat', 'lng']].values)
-    )
-
-    # Calculate traveling distance and time between field centroids
-    travel_distances = []
-    travel_times = []
-    field_ids = list(valid_fields)
-    
-    if len(field_ids) > 1:
-        for i in range(len(field_ids) - 1):
-            centroid1 = centroids.loc[field_ids[i]]
-            centroid2 = centroids.loc[field_ids[i + 1]]
-            distance = geodesic(centroid1, centroid2).kilometers
-            time = (field_dates.loc[field_ids[i + 1], 'start_date'] - field_dates.loc[field_ids[i], 'end_date']).total_seconds() / 60.0
-            travel_distances.append(distance)
-            travel_times.append(time)
-
-        # Calculate distance from last point of one field to first point of the next field
-        for i in range(len(field_ids) - 1):
-            end_point = fields[fields['field_id'] == field_ids[i]][['lat', 'lng']].values[-1]
-            start_point = fields[fields['field_id'] == field_ids[i + 1]][['lat', 'lng']].values[0]
-            distance = geodesic(end_point, start_point).kilometers
-            time = (field_dates.loc[field_ids[i + 1], 'start_date'] - field_dates.loc[field_ids[i], 'end_date']).total_seconds() / 60.0
-            travel_distances.append(distance)
-            travel_times.append(time)
-
-        # Append NaN for the last field
-        travel_distances.append(np.nan)
-        travel_times.append(np.nan)
-    else:
-        travel_distances.append(np.nan)
-        travel_times.append(np.nan)
-
-    # Ensure lengths match for DataFrame
-    if len(travel_distances) != len(field_areas_gunthas):
-        travel_distances = travel_distances[:len(field_areas_gunthas)]
-        travel_times = travel_times[:len(field_areas_gunthas)]
-
-    # Combine area, time, dates, and travel metrics into a single DataFrame
-    combined_df = pd.DataFrame({
-        'Field ID': field_areas_gunthas.index,
-        'Area (Gunthas)': field_areas_gunthas.values,
-        'Time (Minutes)': field_times.values,
-        'Start Date': field_dates['start_date'].values,
-        'End Date': field_dates['end_date'].values,
-        'Travel Distance to Next Field (km)': travel_distances,
-        'Travel Time to Next Field (minutes)': travel_times
-    })
-    
-    # Create a satellite map
-    map_center = [gps_data['lat'].mean(), gps_data['lng'].mean()]
-    m = folium.Map(location=map_center, zoom_start=12)
-    
-    # Add Mapbox satellite imagery
-    mapbox_token = 'pk.eyJ1IjoiZmxhc2hvcDAwNyIsImEiOiJjbHo5NzkycmIwN2RxMmtzZHZvNWpjYmQ2In0.A_FZYl5zKjwSZpJuP_MHiA'
-    folium.TileLayer(
-        tiles='https://api.mapbox.com/styles/v1/mapbox/satellite-v9/tiles/256/{z}/{x}/{y}?access_token=' + mapbox_token,
-        attr='Mapbox Satellite Imagery',
-        name='Satellite',
-        overlay=True,
-        control=True
-    ).add_to(m)
-    
-    # Add fullscreen control
-    plugins.Fullscreen(position='topright').add_to(m)
-
-    # Plot the points on the map
-    for idx, row in gps_data.iterrows():
-        color = 'blue' if row['field_id'] in valid_fields else 'red'  # Blue for fields, red for noise
-        folium.CircleMarker(
-            location=(row['lat'], row['lng']),
-            radius=2,
-            color=color,
-            fill=True,
-            fill_color=color
-        ).add_to(m)
-
-    return m, combined_df
-
-# Function to generate a download link for the map
-def get_map_download_link(map_obj, filename='map.html'):
-    # Save the map to an HTML file
-    map_html = map_obj._repr_html_()
-    b64 = base64.b64encode(map_html.encode()).decode()
-    href = f'<a href="data:file/html;base64,{b64}" download="{filename}">Download Map</a>'
-    return href
-
 # Streamlit app
-st.title("Field Area and Time Calculation from GPS Data")
+st.title("IoT Data Fetching, Processing, and Area Calculation")
 
-# Display logo
-st.markdown("""
-    <style>
-        .header { display: flex; align-items: center; }
-        .header img { height: 80px; margin-right: 35px; }
-    </style>
-    <div class="header">
-        <img src="https://i.ibb.co/JjWJLpd/image.png" alt="Logo">
-        <h1>Field Area and Time Calculation from GPS Data</h1>
-    </div>
-""", unsafe_allow_html=True)
-
-st.write("Select a machine and date range to calculate field areas and visualize them on a satellite map.")
-
-# Input fields for machine ID and date range
-api_key = st.text_input("API Key")
-machine_id = st.text_input("Machine ID")
+# Input fields for API Key, Vehicle ID, and date range
+api_key = st.text_input("API Key", value="3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d")
+vehicle = st.text_input("Vehicle ID")
 start_date = st.date_input("Start Date")
 end_date = st.date_input("End Date")
 
-if st.button("Fetch Data and Calculate Area"):
-    if api_key and machine_id and start_date and end_date:
-        gps_data = fetch_data(api_key, machine_id, start_date, end_date)
-        if not gps_data.empty:
-            folium_map, combined_df = process_data(gps_data)
+if st.button("Fetch Data"):
+    if api_key and vehicle and start_date and end_date:
+        start_timestamp = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
+        end_timestamp = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
+        
+        data = fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp)
+        if data:
+            df = process_data(data)
+            st.write("Fetched Data:", df)
             
-            if folium_map is not None:
-                st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
-                st.write("Download the combined data as a CSV file:")
-                
-                # Provide download link
-                csv = combined_df.to_csv(index=False)
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name='field_areas_times_dates_and_travel_metrics.csv',
-                    mime='text/csv'
-                )
-                
-                # Provide download link for map
-                map_download_link = get_map_download_link(folium_map)
-                st.markdown(map_download_link, unsafe_allow_html=True)
-            else:
-                st.error("Failed to process the data.")
-        else:
-            st.error("No data fetched. Please check your inputs.")
+            # Calculate the area using convex hull
+            points = df[['lat', 'lng']].values
+            area_square_degrees = calculate_convex_hull_area(points)
+            area_square_meters = area_square_degrees * (111000 ** 2)  # Conversion to square meters
+            
+            st.write(f"Calculated Field Area: {area_square_meters:.2f} square meters")
+            
+            # Optionally, you can further process and visualize the data as needed
     else:
         st.error("Please provide all inputs.")
