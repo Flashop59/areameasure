@@ -15,7 +15,9 @@ def fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp):
     url = f"https://admintestapi.ensuresystem.in/api/locationpull/orbit?vehicle={vehicle}&from={start_timestamp}&to={end_timestamp}"
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        return response.json()
+        raw_data = response.json()
+        st.write("Raw API Response:", raw_data)  # Debug: Output raw response
+        return raw_data
     else:
         st.error(f"Failed to fetch data: {response.status_code}")
         return []
@@ -41,34 +43,37 @@ def convert_to_ist(utc_time):
 # Function to process the data and return a DataFrame
 def process_data(data):
     processed_data = []
-    for index, entry in enumerate(data):
-        try:
-            # Print the keys of the current entry for debugging
-            st.write(f"Processing entry: {entry}")
-            ist_time = convert_to_ist(entry.get('time', ''))
-            lat = entry.get('lat', 'N/A')
-            lon = entry.get('lon', 'N/A')
-            odometer = entry.get('odometer', 'N/A')
-            state = entry.get('state', 'N/A')
+    # Check if the data is a list of dictionaries
+    if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
+        for index, entry in enumerate(data):
+            try:
+                ist_time = convert_to_ist(entry.get('time', ''))
+                lat = entry.get('lat', 'N/A')
+                lon = entry.get('lon', 'N/A')
+                odometer = entry.get('odometer', 'N/A')
+                state = entry.get('state', 'N/A')
 
-            if lat == 'N/A' or lon == 'N/A':
-                st.warning(f"Missing latitude or longitude in entry {index}. Skipping.")
+                if lat == 'N/A' or lon == 'N/A':
+                    st.warning(f"Missing latitude or longitude in entry {index}. Skipping.")
+                    continue
+
+                processed_data.append([
+                    ist_time,
+                    lat,
+                    lon,
+                    odometer,
+                    state,
+                    index + 1
+                ])
+            except KeyError as e:
+                st.error(f"Missing key in data: {e}")
                 continue
-
-            processed_data.append([
-                ist_time,
-                lat,
-                lon,
-                odometer,
-                state,
-                index + 1
-            ])
-        except KeyError as e:
-            st.error(f"Missing key in data: {e}")
-            continue
-        except Exception as e:
-            st.error(f"Error processing entry {index}: {e}")
-            continue
+            except Exception as e:
+                st.error(f"Error processing entry {index}: {e}")
+                continue
+    else:
+        st.error("Unexpected data format.")
+    
     return pd.DataFrame(processed_data, columns=["Timestamp", "lat", "lng", "Odometer", "State", "Point"])
 
 # Function to calculate the area of a field in square meters using convex hull
