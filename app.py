@@ -22,7 +22,10 @@ def fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp):
 
 # Function to convert UTC to IST
 def convert_to_ist(utc_time):
-    utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+    try:
+        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+    except ValueError:
+        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%f')
     ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
     return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -30,15 +33,19 @@ def convert_to_ist(utc_time):
 def process_data(data):
     processed_data = []
     for index, entry in enumerate(data):
-        ist_time = convert_to_ist(entry['time'])
-        processed_data.append([
-            ist_time,
-            entry['lat'],
-            entry['lon'],
-            entry['odometer'],
-            entry['state'],
-            index + 1
-        ])
+        try:
+            ist_time = convert_to_ist(entry['time'])
+            processed_data.append([
+                ist_time,
+                entry['lat'],
+                entry['lon'],
+                entry['odometer'],
+                entry['state'],
+                index + 1
+            ])
+        except KeyError as e:
+            st.error(f"Missing key in data: {e}")
+            continue
     return pd.DataFrame(processed_data, columns=["Timestamp", "lat", "lng", "Odometer", "State", "Point"])
 
 # Function to calculate the area of a field in square meters using convex hull
