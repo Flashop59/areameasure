@@ -9,17 +9,17 @@ def convert_to_ist(utc_time):
         utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
     except ValueError:
         # Handle formats without microseconds
-        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%f')
+        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S')
     ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
     return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
 
 # Function to process the fetched data
 def process_data(data):
     processed_data = []
-    if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
+    if isinstance(data, list):
         for index, entry in enumerate(data):
             try:
-                timestamp = entry.get('time', None)
+                timestamp = entry.get('time')
                 lat = entry.get('lat', 'N/A')
                 lon = entry.get('lon', 'N/A')
                 odometer = entry.get('odometer', 'N/A')
@@ -30,10 +30,6 @@ def process_data(data):
                 else:
                     ist_time = 'Invalid Timestamp'
 
-                if lat == 'N/A' or lon == 'N/A':
-                    st.warning(f"Missing latitude or longitude in entry {index}. Skipping.")
-                    continue
-
                 processed_data.append([
                     ist_time,
                     lat,
@@ -42,14 +38,11 @@ def process_data(data):
                     state,
                     index + 1
                 ])
-            except KeyError as e:
-                st.error(f"Missing key in data: {e}")
-                continue
             except Exception as e:
                 st.error(f"Error processing entry {index}: {e}")
                 continue
     else:
-        st.error("Unexpected data format.")
+        st.error("Unexpected data format. Expected a list.")
     
     return pd.DataFrame(processed_data, columns=["Timestamp", "lat", "lng", "Odometer", "State", "Point"])
 
@@ -64,6 +57,10 @@ def fetch_data(vehicle, start_time, end_time):
         response = requests.get(api_url, headers=headers)
         response.raise_for_status()  # Raise an error for bad HTTP status codes
         data = response.json()
+        
+        if not isinstance(data, list):
+            st.error("API response is not a list. Response received: {}".format(data))
+            return []
         return data
     except requests.exceptions.RequestException as e:
         st.error(f"HTTP Request failed: {e}")
@@ -79,7 +76,7 @@ start_time = st.time_input("Start Time", value=datetime.strptime('00:00:00', '%H
 end_timestamp = st.date_input("End Date", value=datetime(2024, 7, 30))
 end_time = st.time_input("End Time", value=datetime.strptime('23:59:59', '%H:%M:%S').time())
 
-# Convert date and time to string format for API
+# Combine date and time for API request
 start_datetime = datetime.combine(start_timestamp, start_time)
 end_datetime = datetime.combine(end_timestamp, end_time)
 
@@ -88,10 +85,15 @@ if st.button("Fetch Data"):
     start_time_str = start_datetime.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
     end_time_str = end_datetime.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
     
+    st.write(f"Fetching data for vehicle: {vehicle} from {start_time_str} to {end_time_str}")
+    
     data = fetch_data(vehicle, start_time_str, end_time_str)
     if data:
         df = process_data(data)
-        st.write("Fetched Data:")
-        st.dataframe(df)
+        if not df.empty:
+            st.write("Fetched Data:")
+            st.dataframe(df)
+        else:
+            st.warning("No valid data available after processing.")
     else:
         st.warning("No data fetched or error occurred.")
