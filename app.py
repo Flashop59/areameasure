@@ -34,17 +34,31 @@ def process_data(data):
     processed_data = []
     for index, entry in enumerate(data):
         try:
-            ist_time = convert_to_ist(entry['time'])
+            # Print the keys of the current entry for debugging
+            st.write(f"Processing entry: {entry}")
+            ist_time = convert_to_ist(entry.get('time', ''))
+            lat = entry.get('lat', 'N/A')
+            lon = entry.get('lon', 'N/A')
+            odometer = entry.get('odometer', 'N/A')
+            state = entry.get('state', 'N/A')
+
+            if lat == 'N/A' or lon == 'N/A':
+                st.warning(f"Missing latitude or longitude in entry {index}. Skipping.")
+                continue
+
             processed_data.append([
                 ist_time,
-                entry['lat'],
-                entry['lon'],
-                entry['odometer'],
-                entry['state'],
+                lat,
+                lon,
+                odometer,
+                state,
                 index + 1
             ])
         except KeyError as e:
             st.error(f"Missing key in data: {e}")
+            continue
+        except Exception as e:
+            st.error(f"Error processing entry {index}: {e}")
             continue
     return pd.DataFrame(processed_data, columns=["Timestamp", "lat", "lng", "Odometer", "State", "Point"])
 
@@ -56,7 +70,8 @@ def calculate_convex_hull_area(points):
         hull = ConvexHull(points)
         poly = Polygon(points[hull.vertices])
         return poly.area  # Area in square degrees
-    except Exception:
+    except Exception as e:
+        st.error(f"Error calculating convex hull area: {e}")
         return 0
 
 # Streamlit app
@@ -79,12 +94,17 @@ if st.button("Fetch Data"):
             st.write("Fetched Data:", df)
             
             # Calculate the area using convex hull
-            points = df[['lat', 'lng']].values
-            area_square_degrees = calculate_convex_hull_area(points)
-            area_square_meters = area_square_degrees * (111000 ** 2)  # Conversion to square meters
-            
-            st.write(f"Calculated Field Area: {area_square_meters:.2f} square meters")
-            
-            # Optionally, you can further process and visualize the data as needed
+            if not df.empty and len(df) > 2:
+                points = df[['lat', 'lng']].dropna().astype(float).values
+                if len(points) > 2:
+                    area_square_degrees = calculate_convex_hull_area(points)
+                    area_square_meters = area_square_degrees * (111000 ** 2)  # Conversion to square meters
+                    st.write(f"Calculated Field Area: {area_square_meters:.2f} square meters")
+                else:
+                    st.write("Not enough points to calculate area.")
+            else:
+                st.write("Dataframe is empty or does not have enough data for area calculation.")
+        else:
+            st.error("No data to process.")
     else:
         st.error("Please provide all inputs.")
