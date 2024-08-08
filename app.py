@@ -1,54 +1,35 @@
 import streamlit as st
 import pandas as pd
 import requests
-import numpy as np
 from datetime import datetime, timedelta
-from shapely.geometry import Polygon
-from scipy.spatial import ConvexHull
-from geopy.distance import geodesic
 
-# Function to fetch data from Ensure IoT API
-def fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp):
-    headers = {
-        'token': api_key
-    }
-    url = f"https://admintestapi.ensuresystem.in/api/locationpull/orbit?vehicle={vehicle}&from={start_timestamp}&to={end_timestamp}"
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        raw_data = response.json()
-        st.write("Raw API Response:", raw_data)  # Debug: Output raw response
-        return raw_data
-    else:
-        st.error(f"Failed to fetch data: {response.status_code}")
-        return []
-
-# Function to convert integer timestamps to IST
-def convert_to_ist(timestamp):
+# Function to convert UTC to IST
+def convert_to_ist(utc_time):
     try:
-        utc_datetime = datetime.fromtimestamp(timestamp / 1000)  # Assuming timestamp is in milliseconds
-        ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
-        return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
-    except Exception as e:
-        st.error(f"Error converting timestamp: {e}")
-        return 'Invalid Timestamp'
+        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
+    except ValueError:
+        # Handle formats without microseconds
+        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%f')
+    ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
+    return ist_datetime.strftime('%Y-%m-%d %H:%M:%S')
 
-# Function to process the data and return a DataFrame
+# Function to process the fetched data
 def process_data(data):
     processed_data = []
-    # Check if the data is a list of numbers
-    if isinstance(data, list) and all(isinstance(entry, int) for entry in data):
+    if isinstance(data, list) and all(isinstance(entry, dict) for entry in data):
         for index, entry in enumerate(data):
             try:
-                # Convert entry to a dictionary for processing
                 timestamp = entry.get('time', None)
                 lat = entry.get('lat', 'N/A')
                 lon = entry.get('lon', 'N/A')
                 odometer = entry.get('odometer', 'N/A')
                 state = entry.get('state', 'N/A')
 
-                # Assuming entry is a timestamp and needs conversion
-                ist_time = convert_to_ist(timestamp)
-                
+                if timestamp:
+                    ist_time = convert_to_ist(timestamp)
+                else:
+                    ist_time = 'Invalid Timestamp'
+
                 if lat == 'N/A' or lon == 'N/A':
                     st.warning(f"Missing latitude or longitude in entry {index}. Skipping.")
                     continue
@@ -72,49 +53,45 @@ def process_data(data):
     
     return pd.DataFrame(processed_data, columns=["Timestamp", "lat", "lng", "Odometer", "State", "Point"])
 
-# Function to calculate the area of a field in square meters using convex hull
-def calculate_convex_hull_area(points):
-    if len(points) < 3:  # Not enough points to form a polygon
-        return 0
+# Function to fetch data from API
+def fetch_data(vehicle, start_time, end_time):
+    api_url = f"https://admintestapi.ensuresystem.in/api/locationpull/orbit?vehicle={vehicle}&from={start_time}&to={end_time}"
+    headers = {
+        "token": "3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d"
+    }
+    
     try:
-        hull = ConvexHull(points)
-        poly = Polygon(points[hull.vertices])
-        return poly.area  # Area in square degrees
-    except Exception as e:
-        st.error(f"Error calculating convex hull area: {e}")
-        return 0
+        response = requests.get(api_url, headers=headers)
+        response.raise_for_status()  # Raise an error for bad HTTP status codes
+        data = response.json()
+        return data
+    except requests.exceptions.RequestException as e:
+        st.error(f"HTTP Request failed: {e}")
+        return []
 
-# Streamlit app
-st.title("IoT Data Fetching, Processing, and Area Calculation")
+# Streamlit UI
+st.title("Vehicle Data Fetcher")
 
-# Input fields for API Key, Vehicle ID, and date range
-api_key = st.text_input("API Key", value="3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d")
-vehicle = st.text_input("Vehicle ID")
-start_date = st.date_input("Start Date")
-end_date = st.date_input("End Date")
+# Input fields
+vehicle = st.text_input("Vehicle ID", value="BR1")
+start_timestamp = st.date_input("Start Date", value=datetime(2024, 7, 30))
+start_time = st.time_input("Start Time", value=datetime.strptime('00:00:00', '%H:%M:%S').time())
+end_timestamp = st.date_input("End Date", value=datetime(2024, 7, 30))
+end_time = st.time_input("End Time", value=datetime.strptime('23:59:59', '%H:%M:%S').time())
 
+# Convert date and time to string format for API
+start_datetime = datetime.combine(start_timestamp, start_time)
+end_datetime = datetime.combine(end_timestamp, end_time)
+
+# Fetch data button
 if st.button("Fetch Data"):
-    if api_key and vehicle and start_date and end_date:
-        start_timestamp = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
-        end_timestamp = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
-        
-        data = fetch_iot_data(api_key, vehicle, start_timestamp, end_timestamp)
-        if data:
-            df = process_data(data)
-            st.write("Fetched Data:", df)
-            
-            # Calculate the area using convex hull
-            if not df.empty and len(df) > 2:
-                points = df[['lat', 'lng']].dropna().astype(float).values
-                if len(points) > 2:
-                    area_square_degrees = calculate_convex_hull_area(points)
-                    area_square_meters = area_square_degrees * (111000 ** 2)  # Conversion to square meters
-                    st.write(f"Calculated Field Area: {area_square_meters:.2f} square meters")
-                else:
-                    st.write("Not enough points to calculate area.")
-            else:
-                st.write("Dataframe is empty or does not have enough data for area calculation.")
-        else:
-            st.error("No data to process.")
+    start_time_str = start_datetime.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    end_time_str = end_datetime.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    
+    data = fetch_data(vehicle, start_time_str, end_time_str)
+    if data:
+        df = process_data(data)
+        st.write("Fetched Data:")
+        st.dataframe(df)
     else:
-        st.error("Please provide all inputs.")
+        st.warning("No data fetched or error occurred.")
