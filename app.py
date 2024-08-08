@@ -9,6 +9,7 @@ from folium import plugins
 import io
 from geopy.distance import geodesic
 import base64
+import requests
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -25,24 +26,21 @@ def calculate_convex_hull_area(points):
 def calculate_centroid(points):
     return np.mean(points, axis=0)
 
-# Function to process the uploaded file and return the map and field areas
-def process_file(file):
-    # Load the CSV file
-    gps_data = pd.read_csv(file)
+# Function to fetch data from the GPS dashboard API
+def fetch_data(api_key, machine_id, start_date, end_date):
+    url = f"https://api.gps-dashboard.com/data?api_key={api_key}&machine_id={machine_id}&start_date={start_date}&end_date={end_date}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return pd.DataFrame(response.json())
+    else:
+        st.error(f"Failed to fetch data: {response.status_code}")
+        return pd.DataFrame()
 
-    # Check the columns available
-    st.write("Available columns:", gps_data.columns.tolist())
-    
-    # Use the correct column names
-    if 'Timestamp' not in gps_data.columns:
-        st.error("The CSV file does not contain a 'Timestamp' column.")
-        return None, None
-    
-    gps_data = gps_data[['lat', 'lng', 'Timestamp']]
-    
-    # Convert Timestamp column to datetime with correct format
-    gps_data['Timestamp'] = pd.to_datetime(gps_data['Timestamp'], format='%d-%m-%Y %H.%M', errors='coerce', dayfirst=True)
-    
+# Function to process the data and return the map and field areas
+def process_data(gps_data):
+    # Convert Timestamp column to datetime
+    gps_data['Timestamp'] = pd.to_datetime(gps_data['Timestamp'], format='%Y-%m-%dT%H:%M:%S', errors='coerce')
+
     # Drop rows where conversion failed
     gps_data = gps_data.dropna(subset=['Timestamp'])
     
@@ -187,29 +185,39 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-st.write("Upload a CSV file with 'lat', 'lng', and 'Timestamp' columns to calculate field areas and visualize them on a satellite map.")
+st.write("Select a machine and date range to calculate field areas and visualize them on a satellite map.")
 
-uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+# Input fields for machine ID and date range
+api_key = st.text_input("API Key")
+machine_id = st.text_input("Machine ID")
+start_date = st.date_input("Start Date")
+end_date = st.date_input("End Date")
 
-if uploaded_file is not None:
-    st.write("Processing file...")
-    folium_map, combined_df = process_file(uploaded_file)
-    
-    if folium_map is not None:
-        st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
-        st.write("Download the combined data as a CSV file:")
-        
-        # Provide download link
-        csv = combined_df.to_csv(index=False)
-        st.download_button(
-            label="Download CSV",
-            data=csv,
-            file_name='field_areas_times_dates_and_travel_metrics.csv',
-            mime='text/csv'
-        )
-        
-        # Provide download link for map
-        map_download_link = get_map_download_link(folium_map)
-        st.markdown(map_download_link, unsafe_allow_html=True)
+if st.button("Fetch Data and Calculate Area"):
+    if api_key and machine_id and start_date and end_date:
+        gps_data = fetch_data(api_key, machine_id, start_date, end_date)
+        if not gps_data.empty:
+            folium_map, combined_df = process_data(gps_data)
+            
+            if folium_map is not None:
+                st.write("Field Areas, Times, Dates, and Travel Metrics:", combined_df)
+                st.write("Download the combined data as a CSV file:")
+                
+                # Provide download link
+                csv = combined_df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name='field_areas_times_dates_and_travel_metrics.csv',
+                    mime='text/csv'
+                )
+                
+                # Provide download link for map
+                map_download_link = get_map_download_link(folium_map)
+                st.markdown(map_download_link, unsafe_allow_html=True)
+            else:
+                st.error("Failed to process the data.")
+        else:
+            st.error("No data fetched. Please check your inputs.")
     else:
-        st.error("Failed to process the file.")
+        st.error("Please provide all inputs.")
