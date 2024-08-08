@@ -1,8 +1,5 @@
-streamlit
-pandas
 requests
-numpy
-shapely
-scipy
-geopy
+pandas
 matplotlib
+geopandas
+shapely
