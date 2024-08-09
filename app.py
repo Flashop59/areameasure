@@ -78,7 +78,7 @@ def process_data(data):
     
     # Cluster the GPS points to identify separate fields
     coords = gps_data[['lat', 'lng']].values
-    db = DBSCAN(eps=0.000081, min_samples=11).fit(coords)
+    db = DBSCAN(eps=0.000085, min_samples=11).fit(coords)
     labels = db.labels_
 
     # Add labels to the data
@@ -90,7 +90,7 @@ def process_data(data):
         lambda df: calculate_convex_hull_area(df[['lat', 'lng']].values))
 
     # Convert the area from square degrees to square meters (approximation)
-    field_areas_m2 = field_areas * 0.652 * (111000 ** 2)  # rough approximation
+    field_areas_m2 = field_areas * 0.77 * (111000 ** 2)  # rough approximation
 
     # Convert the area from square meters to gunthas (1 guntha = 101.17 m^2)
     field_areas_gunthas = field_areas_m2 / 101.17
