@@ -78,7 +78,7 @@ def process_data(data):
     
     # Cluster the GPS points to identify separate fields
     coords = gps_data[['lat', 'lng']].values
-    db = DBSCAN(eps=0.000079, min_samples=11).fit(coords)
+    db = DBSCAN(eps=0.0001, min_samples=11).fit(coords)
     labels = db.labels_
 
     # Add labels to the data
