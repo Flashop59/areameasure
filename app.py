@@ -7,28 +7,8 @@ from scipy.spatial import ConvexHull
 import folium
 from folium import plugins
 from geopy.distance import geodesic
-import requests
-from datetime import datetime, timedelta
-
-# Function to fetch data from the API
-def fetch_data(vehicle, start_time, end_time):
-    API_KEY = "3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d"
-    url = f"https://admintestapi.ensuresystem.in/api/locationpull/orbit?vehicle={vehicle}&from={start_time}&to={end_time}"
-    headers = {"token": API_KEY}
-    
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        st.error(f"Error fetching data: {response.status_code}")
-        return None
-
-    data = response.json()
-    if not isinstance(data, list):
-        st.error(f"Unexpected data format: {data}")
-        return None
-    
-    # Sort data by time
-    data.sort(key=lambda x: x['time'])
-    return data
+import base64
+import os
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -45,13 +25,26 @@ def calculate_convex_hull_area(points):
 def calculate_centroid(points):
     return np.mean(points, axis=0)
 
-# Function to process the fetched data and return the map and field areas
-def process_data(data):
-    # Create a DataFrame from the fetched data
-    gps_data = pd.DataFrame(data)
-    gps_data['Timestamp'] = pd.to_datetime(gps_data['time'], unit='ms')
-    gps_data['lat'] = gps_data['lat']
-    gps_data['lng'] = gps_data['lon']
+# Function to process the uploaded file and return the map and field areas
+def process_file(file):
+    # Load the CSV file
+    gps_data = pd.read_csv(file)
+
+    # Check the columns available
+    st.write("Available columns:", gps_data.columns.tolist())
+    
+    # Use the correct column names
+    if 'Timestamp' not in gps_data.columns:
+        st.error("The CSV file does not contain a 'Timestamp' column.")
+        return None, None
+    
+    gps_data = gps_data[['lat', 'lng', 'Timestamp']]
+    
+    # Convert Timestamp column to datetime with correct format
+    gps_data['Timestamp'] = pd.to_datetime(gps_data['Timestamp'], format='%d-%m-%Y %H.%M', errors='coerce', dayfirst=True)
+    
+    # Drop rows where conversion failed
+    gps_data = gps_data.dropna(subset=['Timestamp'])
     
     # Cluster the GPS points to identify separate fields
     coords = gps_data[['lat', 'lng']].values
@@ -170,7 +163,16 @@ def process_data(data):
 
     return m, combined_df
 
-# Streamlit UI
+# Function to generate a download link for the map and provide the ability to open it in a new tab
+def get_map_download_link(map_obj, filename='map.html'):
+    # Save the map to an HTML file
+    map_obj.save(filename)
+    
+    # Provide a link to open the map in a new tab
+    href = f'<a href="file://{os.path.abspath(filename)}" target="_blank">Open Map in New Tab</a>'
+    return href
+
+# Streamlit app
 st.title("Field Area and Time Calculation from GPS Data")
 
 # Display logo
@@ -185,35 +187,18 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-st.write("Enter vehicle details and date range to calculate field areas and visualize them on a satellite map.")
+st.write("Upload a CSV file with 'lat', 'lng', and 'Timestamp' columns to calculate field areas and visualize them on a satellite map.")
 
-vehicle = st.text_input("Enter Vehicle ID (e.g., BR1):")
-start_time = st.text_input("Enter Start Time (e.g., 2024-07-30 00:00:00):")
-end_time = st.text_input("Enter End Time (e.g., 2024-07-30 23:59:59):")
+uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
-if st.button("Fetch and Process Data"):
-    if vehicle and start_time and end_time:
-        # Convert times to milliseconds since epoch
-        start_time_ms = int(datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
-        end_time_ms = int(datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
-        
-        # Fetch data from the API
-        data = fetch_data(vehicle, start_time_ms, end_time_ms)
-        
-        if data:
-            # Process the data and generate the map and DataFrame
-            map_obj, combined_df = process_data(data)
-            
-            # Display the map
-            st.subheader("Field Map")
-            st.write(map_obj._repr_html_(), unsafe_allow_html=True)
-            
-            # Display the DataFrame
-            st.subheader("Field Area and Time Data")
-            st.dataframe(combined_df)
-            
-            # Downloadable CSV of the DataFrame
-            csv = combined_df.to_csv(index=False).encode('utf-8')
-            st.download_button(label="Download CSV", data=csv, file_name=f'{vehicle}_field_data.csv', mime='text/csv')
-    else:
-        st.warning("Please enter all required fields.")
+if uploaded_file is not None:
+    st.write("Processing file...")
+    map_obj, field_data = process_file(uploaded_file)
+
+    if map_obj:
+        st.write("Field Areas and Times:")
+        st.dataframe(field_data)
+
+        # Generate and display the map
+        st.write("Field Map:")
+        st.markdown(get_map_download_link(map_obj), unsafe_allow_html=True)
