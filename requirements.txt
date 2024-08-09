@@ -1,5 +1,8 @@
-requests
+streamlit
 pandas
-matplotlib
-geopandas
+numpy
 shapely
+scikit-learn
+scipy
+folium
+geopy
