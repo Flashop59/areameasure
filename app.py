@@ -2,86 +2,73 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
 
-def fetch_data(vehicle_id, start_time, end_time):
-    url = 'https://admintestapi.ensuresystem.in/api/locationpull/orbit'
-    headers = {"token": "3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d"}
-    params = {
-        'vehicle': vehicle_id,
-        'from': start_time,
-        'to': end_time
-    }
+# API key
+API_KEY = "3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d"
+
+# Function to fetch data from the API
+def fetch_data(vehicle, start_time, end_time):
+    url = f"https://admintestapi.ensuresystem.in/api/locationpull/orbit?vehicle={vehicle}&from={start_time}&to={end_time}"
+    headers = {"token": API_KEY}
     
-    response = requests.get(url, headers=headers, params=params)
-    
-    if response.status_code == 200:
-        json_response = response.json()
-        if isinstance(json_response, list):
-            return json_response
-        else:
-            st.error(f"Unexpected data format: {json_response}")
-            return None
-    else:
-        st.error(f"API request failed with status code {response.status_code}")
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        st.error(f"Error fetching data: {response.status_code}")
         return None
 
+    data = response.json()
+    if not isinstance(data, list):
+        st.error(f"Unexpected data format: {data}")
+        return None
+    
+    # Sort data by time
+    data.sort(key=lambda x: x['time'])
+    return data
+
+# Function to convert UTC to IST
 def convert_to_ist(utc_time):
-    try:
-        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
-    except ValueError:
-        utc_datetime = datetime.strptime(utc_time, '%Y-%m-%dT%H:%M:%S.%fZ')
-    ist_datetime = utc_datetime + timedelta(hours=5, minutes=30)
-    return ist_datetime
+    date = datetime.fromtimestamp(utc_time / 1000)
+    ist_time = date + timedelta(minutes=330)  # Adding 5 hours 30 minutes
+    return ist_time.strftime('%Y-%m-%d %H:%M:%S')
 
+# Function to process data and calculate area
 def process_data(data):
-    processed_data = []
-    for entry in data:
-        try:
-            ist_time = convert_to_ist(entry['time'])
-            processed_data.append([
-                ist_time.strftime('%Y-%m-%d %H:%M:%S'),
-                entry['lat'],
-                entry['lng'],
-                entry['odometer'],
-                entry['state'],
-                entry.get('point', 'N/A')
-            ])
-        except Exception as e:
-            st.error(f"Error processing entry: {e}")
-    return pd.DataFrame(processed_data, columns=["Timestamp", "Latitude", "Longitude", "Odometer", "State", "Point"])
+    df = pd.DataFrame(data)
+    df['Timestamp'] = df['time'].apply(convert_to_ist)
+    df['lat'] = df['lat']
+    df['lng'] = df['lon']
+    df['Odometer'] = df['odometer']
+    df['State'] = df['state']
+    df['Point'] = df.index + 1
+    
+    # Additional calculations like distance, speed, and area estimation here
+    # ...
 
-def plot_data(df):
-    if not df.empty:
-        plt.figure(figsize=(10, 6))
-        plt.scatter(df['Longitude'], df['Latitude'], c='blue', label='Location')
-        plt.xlabel('Longitude')
-        plt.ylabel('Latitude')
-        plt.title('Machine Locations')
-        plt.legend()
-        st.pyplot(plt)
-    else:
-        st.warning("No data to plot.")
+    return df
 
-st.title("Fetch and Visualize IoT Data")
+# Streamlit UI
+st.title("IoT Data Fetching and Area Calculation")
 
-vehicle_id = st.text_input("Vehicle ID")
-start_time = st.date_input("Start Time", datetime.now())
-end_time = st.date_input("End Time", datetime.now())
+vehicle = st.text_input("Enter Vehicle ID (e.g., BR1):")
+start_time = st.text_input("Enter Start Time (e.g., 2024-07-30 00:00:00):")
+end_time = st.text_input("Enter End Time (e.g., 2024-07-30 23:59:59):")
 
 if st.button("Fetch Data"):
-    # Format the dates as required by the API
-    try:
-        start_time_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.000000Z')
-        end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.000000Z')
-        
-        st.write(f"Fetching data for vehicle: {vehicle_id} from {start_time_str} to {end_time_str}")
-        
-        data = fetch_data(vehicle_id, start_time_str, end_time_str)
-        
+    if vehicle and start_time and end_time:
+        # Convert times to milliseconds since epoch
+        start_time_epoch = int(datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S').timestamp() * 1000)
+        end_time_epoch = int(datetime.strptime(end_time, '%Y-%m-%d %H:%M:%S').timestamp() * 1000)
+
+        data = fetch_data(vehicle, start_time_epoch, end_time_epoch)
         if data:
             df = process_data(data)
-            st.write(df)
-            plot_data(df)
-    except Exception as e:
-        st.error(f"Error: {e}")
+            st.write("Fetched Data:")
+            st.dataframe(df)
+            
+            # Area calculation can be implemented here
+            # ...
+        else:
+            st.error("No data fetched or error occurred.")
+    else:
+        st.error("Please fill in all fields.")
+
