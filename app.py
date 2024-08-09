@@ -15,7 +15,7 @@ import warnings
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-# Function to fetch data from the API
+# Function to fetch data from the API for a single 24-hour period
 def fetch_data(vehicle, start_time, end_time):
     API_KEY = "3330d953-7abc-4bac-b862-ac315c8e2387-6252fa58-d2c2-4c13-b23e-59cefafa4d7d"
     url = f"https://admintestapi.ensuresystem.in/api/locationpull/orbit?vehicle={vehicle}&from={start_time}&to={end_time}"
@@ -34,6 +34,24 @@ def fetch_data(vehicle, start_time, end_time):
     # Sort data by time
     data.sort(key=lambda x: x['time'])
     return data
+
+# Function to fetch data over a range of dates in 24-hour intervals
+def fetch_data_over_period(vehicle, start_date, end_date):
+    all_data = []
+    current_start = start_date
+
+    while current_start < end_date:
+        current_end = min(current_start + timedelta(days=1), end_date)
+        start_time_ms = int(current_start.timestamp() * 1000)
+        end_time_ms = int(current_end.timestamp() * 1000)
+        
+        data = fetch_data(vehicle, start_time_ms, end_time_ms)
+        if data:
+            all_data.extend(data)
+        
+        current_start = current_end
+    
+    return all_data
 
 # Function to calculate the area of a field in square meters using convex hull
 def calculate_convex_hull_area(points):
@@ -190,35 +208,38 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-st.write("Enter vehicle details and date range to calculate field areas and visualize them on a satellite map.")
+st.write("Enter vehicle details and select the date range to calculate field areas and visualize them on a satellite map.")
 
 vehicle = st.text_input("Enter Vehicle ID (e.g., BR1):")
-start_time = st.text_input("Enter Start Time (e.g., 2024-07-30 00:00:00):")
-end_time = st.text_input("Enter End Time (e.g., 2024-07-30 23:59:59):")
+start_date = st.date_input("Select Start Date:")
+end_date = st.date_input("Select End Date:")
 
 if st.button("Fetch and Process Data"):
-    if vehicle and start_time and end_time:
-        # Convert times to milliseconds since epoch
-        start_time_ms = int(datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
-        end_time_ms = int(datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
-        
-        # Fetch data from the API
-        data = fetch_data(vehicle, start_time_ms, end_time_ms)
-        
-        if data:
-            # Process the data and generate the map and DataFrame
-            map_obj, combined_df = process_data(data)
+    if vehicle and start_date and end_date:
+        if start_date > end_date:
+            st.warning("Start date cannot be after end date.")
+        else:
+            # Set times to the start of the day and end of the day
+            start_datetime = datetime.combine(start_date, datetime.min.time())
+            end_datetime = datetime.combine(end_date, datetime.max.time())
             
-            # Display the map
-            st.subheader("Field Map")
-            folium_static(map_obj)
+            # Fetch data over the selected period
+            data = fetch_data_over_period(vehicle, start_datetime, end_datetime)
             
-            # Display the DataFrame
-            st.subheader("Field Area and Time Data")
-            st.dataframe(combined_df)
-            
-            # Downloadable CSV of the DataFrame
-            csv = combined_df.to_csv(index=False).encode('utf-8')
-            st.download_button(label="Download CSV", data=csv, file_name=f'{vehicle}_field_data.csv', mime='text/csv')
+            if data:
+                # Process the data and generate the map and DataFrame
+                map_obj, combined_df = process_data(data)
+                
+                # Display the map
+                st.subheader("Field Map")
+                folium_static(map_obj)
+                
+                # Display the DataFrame
+                st.subheader("Field Area and Time Data")
+                st.dataframe(combined_df)
+                
+                # Downloadable CSV of the DataFrame
+                csv = combined_df.to_csv(index=False).encode('utf-8')
+                st.download_button(label="Download CSV", data=csv, file_name=f'{vehicle}_field_data.csv', mime='text/csv')
     else:
         st.warning("Please enter all required fields.")
